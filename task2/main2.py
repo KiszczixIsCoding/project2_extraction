@@ -4,21 +4,179 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+# from sklearn.model_selection import train_test_split
+# from sklearn.preprocessing import StandardScaler
 from torch import optim, nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
+from torchvision import datasets, transforms
 
-import importer.import_datasets as importer
+# import importer.import_datasets as importer
 import params as p
-from analysis import get_all_metrics
-from datasets.ImagenetteDataset import ImagenetteDataset
-from datasets.MnistDataset import MnistDataset
-from task1.plot_drawer import draw_accuracy, draw1, draw3
-from task2.models.MNIST1_CNNModel import MNIST1_CNNModel
-from task2.models.MNIST_CNNModel import MNIST_CNNModel
+# from analysis import get_all_metrics
+# from datasets.ImagenetteDataset import ImagenetteDataset
+# from datasets.MnistDataset import MnistDataset
+# from task1.plot_drawer import draw_accuracy, draw1, draw3
+# from task2.models.MNIST1_CNNModel import MNIST1_CNNModel
+# from task2.models.MNIST_CNNModel import MNIST_CNNModel
+
+class MNIST_CNNModel(nn.Module):
+    def __init__(self, input_size, num_classes):
+        super(MNIST_CNNModel, self).__init__()
+        self.features_extractor = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),  # Ostatnia warstwa konwolucyjna z 64 kanałami
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.AdaptiveAvgPool2d((1, 1)),  # [B, 64, 1, 1]
+            nn.Flatten()
+        )
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, 224, 224)
+            # dummy = torch.zeros(1, 1, 28, 28)
+            flatten_dim = self.features_extractor(dummy).shape[1]
+
+        print(f"FLatten {flatten_dim}")
+        self.classifier = nn.Sequential(
+            nn.Linear(flatten_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, num_classes)
+        )
+
+    def forward(self, x):
+        features = self.features_extractor(x)
+        x = self.classifier(features)
+        return x, features
+
+    def predict(self, x):
+        self.eval()  # tryb ewaluacji (wyłącz dropout, batchnorm itd.)
+        with torch.no_grad():  # nie liczymy gradientów (oszczędność pamięci)
+            outputs = self.forward(x)
+            _, preds = torch.max(outputs, dim=1)  # indeks klasy z najwyższym prawdopodobieństwem
+        return preds
+
+transform_translations_imagenette = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.CenterCrop(224),
+    transforms.RandomHorizontalFlip(p=1.0),  # Losowe odbicie w poziomie (50% szansa)
+    transforms.ColorJitter(brightness=0.2, contrast=0.3, saturation=0.2, hue=0.1),  # Zmiany koloru, kontrastu i nasycenia
+    transforms.ToTensor(),  # konwertuje do [0, 1]
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225])  # normalizacja jak w ImageNet
+])
+
+transform_mnist = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,)) # zmienia PIL.Image na tensor [0,1]
+])
+
+transform_translation_mnist = transforms.Compose([
+    # transforms.RandomRotation(degrees=15),  # Losowa rotacja do ±10°
+    # transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),  # Przesunięcie w poziomie/pionie do 10%
+    # transforms.RandomApply([transforms.GaussianBlur(kernel_size=3)], p=0.3),  # Szum (30% szansa)
+    # transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),  # Zmiana ostrości (30% szansa)
+    transforms.ToTensor(),  # Konwersja do tensora
+    transforms.Normalize((0.1307,), (0.3081,))
+])
+
+def import_mnist(train):
+    return datasets.MNIST(root='../resources', train=train, download=True, transform=transform_mnist)
+
+def import_mnist_subset(train, subset_len):
+    mnist_dataset = datasets.MNIST(root='../resources', train=train, download=True, transform=transform_translation_mnist)
+
+    # for i in range(15):
+    #     image_tensor, label = mnist_dataset[i]
+    #
+    #     # Odpinamy normalizację dla wyświetlenia (odwracamy standaryzację)
+    #     unnormalized = image_tensor * 0.3081 + 0.1307
+    #
+    #     # Wyświetlamy
+    #     plt.imshow(unnormalized.squeeze(), cmap='gray')
+    #     plt.title(f"Label: {label}")
+    #     plt.axis('off')
+    #     plt.show()
+    #
+    # print(int(subset_len / 10))
+    class_counts = {i: 0 for i in range(int(subset_len / 10))}
+    selected_indices = []
+    for idx, (_, label) in enumerate(mnist_dataset):
+        label = int(label)
+        if class_counts[label] < int(subset_len / 10):
+            selected_indices.append(idx)
+            class_counts[label] += 1
+        if sum(class_counts.values()) >= subset_len:
+            break
+
+    # Stwórz ograniczony dataset
+    balanced_subset = Subset(mnist_dataset, selected_indices)
+    print("Rozmiar nowego zbioru:", len(balanced_subset))
+    labels = [balanced_subset[i][1] for i in range(len(balanced_subset))]
+    print("Rozkład klas:", {i: labels.count(i) for i in range(int(subset_len / 10))})
+    print(type(balanced_subset))
+
+    return balanced_subset
+
+# def import_imagenette(train_str):
+#     return datasets.Imagenette(root='../resources-imagenette',split=train_str, download=True, transform=transform1)
+
+def unnormalize(tensor, mean, std):
+    mean = torch.tensor(mean).view(3, 1, 1)  # Dopasowanie wymiarów
+    std = torch.tensor(std).view(3, 1, 1)
+    return tensor * std + mean
+
+def import_imagenette_subset(train_str, subset_len):
+    imagenette_dataset = datasets.Imagenette(root='../resources-imagenette',split=train_str, download=True, transform=transform_translations_imagenette)
+    # imagenette_dataset1 = datasets.Imagenette(root='../resources-imagenette',split=train_str, download=True, transform=transform1)
+
+    # for i in range(15):
+    #     image_tensor, label = imagenette_dataset[8000 + i]
+    #     image_tensor1, label1 = imagenette_dataset1[8000 + i]
+    #
+    #     # Odpinamy normalizację dla wyświetlenia (odwracamy standaryzację)
+    #     unnormalized = unnormalize(image_tensor, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    #     unnormalized1 = unnormalize(image_tensor1, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    #     unnormalized_image = unnormalized.permute(1, 2, 0).cpu().numpy()
+    #     unnormalized_image1 = unnormalized1.permute(1, 2, 0).cpu().numpy()
+    #     # Wyświetlamy
+    #     plt.title(f"Label: {label1}")
+    #     plt.imshow(unnormalized_image1)
+    #     plt.show()
+    #     plt.imshow(unnormalized_image)
+    #     plt.title(f"Label: {label}")
+    #     plt.axis('off')
+    #     plt.show()
+
+    print(int(subset_len / 10))
+    class_counts = {i: 0 for i in range(int(subset_len / 10))}
+    selected_indices = []
+    for idx, (_, label) in enumerate(imagenette_dataset):
+        label = int(label)
+        if class_counts[label] < int(subset_len / 10):
+            selected_indices.append(idx)
+            class_counts[label] += 1
+        if sum(class_counts.values()) >= subset_len:
+            break
+
+    # Stwórz ograniczony dataset
+    balanced_subset = Subset(imagenette_dataset, selected_indices)
+    print("Rozmiar nowego zbioru:", len(balanced_subset))
+    labels = [balanced_subset[i][1] for i in range(len(balanced_subset))]
+    print("Rozkład klas:", {i: labels.count(i) for i in range(int(subset_len / 10))})
+    print(type(balanced_subset))
+
+    return balanced_subset
+
+
 
 def train_and_eval_model(model, train_loader, test_loader, num_epochs, draw=True):
     criterion = nn.CrossEntropyLoss()
@@ -170,11 +328,15 @@ def main():
     subset_len = 100
     num_epochs = 1000
     if p.dataset2 == 'mnist':
-        org_train_data = importer.import_mnist_subset(True, subset_len)
-        org_test_data = importer.import_mnist(False)
+        # org_train_data = importer.import_mnist_subset(True, subset_len)
+        # org_test_data = importer.import_mnist(False)
+        org_train_data = import_mnist_subset(True, subset_len)
+        org_test_data = import_mnist(False)
     elif p.dataset2 == 'imagenette':
-        org_train_data = importer.import_imagenette_subset('train', subset_len)
-        org_test_data = importer.import_imagenette('val')
+        # org_train_data = importer.import_imagenette_subset('train', subset_len)
+        # org_test_data = importer.import_imagenette('val')
+        org_train_data = import_imagenette_subset('train', subset_len)
+        org_test_data = import_imagenette('val')
 
     train_loader = DataLoader(org_train_data, batch_size=32, shuffle=True)
     test_loader = DataLoader(org_test_data, batch_size=32, shuffle=False)
