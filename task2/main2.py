@@ -130,7 +130,7 @@ def train_and_eval_model(model, train_loader, test_loader, num_epochs, draw=True
             #     # draw3(test_dff_final, test_df['predicted'], f'{folder_path}/{epoch}/voronoi-test.png')
             #     draw3(test_dff_final, test_df['predicted'], model,f'{folder_path}/{epoch}/voronoi-test.png')
 
-        print(f'Accuracy1: {accuracy_score(test_df['predicted'], test_df['label'])}%')
+        print(f'Accuracy1: {accuracy_score(test_df["predicted"], test_df["label"])}%')
         accuracy_score_sets["test"].append(accuracy_score(test_df['predicted'], test_df['label']))
         # draw_accuracy(accuracy_score_sets, "wine", f"{folder_path}/{epoch}/accuracy", epoch + 1)
 
@@ -192,3 +192,6 @@ def main():
     print(f"Średnia: {mean:.2f}, Odchylenie standardowe: {std_dev:.2f}")
 
 main()
+
+if __name__ == "__main__":
+    main()
